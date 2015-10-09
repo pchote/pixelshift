@@ -6,7 +6,7 @@
 CC ?= gcc
 LINKER ?= gcc
 CFLAGS = -g -c -Wall -pedantic --std=c99 -D_POSIX_C_SOURCE=200112L -D_BSD_SOURCE
-LFLAGS = -lcfitsio
+LFLAGS = -lcfitsio -lm
 
 ifeq ($(shell uname),Darwin)
 	CFLAGS += -D_DARWIN_C_SOURCE -I/usr/local/include/
