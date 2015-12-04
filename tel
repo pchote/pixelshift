@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+#
+# This file is part of pixelshift.
+#
+# pixelshift is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# vaisalad is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with pixelshift.  If not, see <http://www.gnu.org/licenses/>.
+
+"""Daemon process for managing the telescope"""
+
+# pylint: disable=invalid-name
+
+import math
+import os
+import sys
+import time
+import Pyro4
+
+DAEMON_URI = 'PYRO:telescope_daemon@localhost:9003'
+SCRIPT_NAME = os.path.basename(sys.argv[0])
+
+# Positions in degrees (alt, az)
+PARK_POSITIONS = {
+    'zenith': (math.pi / 2, 0),
+    'stow': (0.616, 0.405)
+}
+
+# This should be kept in sync with the class in teld
+STATUS_CODES = {
+    # General error codes
+    0: 'Command complete',
+    1: 'Command failed',
+    2: 'Command failed: another command is already running',
+
+    # Command-specific codes
+    10: 'Command failed: telescope has not been initialized',
+    11: 'Command failed: telescope has not been homed',
+
+    # tel specific codes
+    -100: 'Command failed: terminated by user',
+    -101: 'Command failed: unable to communicate with telescope daemon'
+}
+
+sys.excepthook = Pyro4.util.excepthook
+
+def run_command(command):
+    """Prints the message associated with a status code and returns the code"""
+    try:
+        ret = command()
+    except KeyboardInterrupt:
+        # ctrl-c terminates the running command
+        ret = stop()
+
+        # Report successful stop
+        if ret == 0:
+            ret = -100
+    except Pyro4.errors.CommunicationError:
+        ret = -101
+
+    if ret in STATUS_CODES:
+        print(STATUS_CODES[ret])
+    else:
+        print('Returned unknown status code: {0}'.format(ret))
+    sys.exit(ret)
+
+def parse_ra(ra_string):
+    """Converts a HH:MM:SS RA string to radians"""
+    parts = ra_string.split(':')
+    if len(parts) != 3:
+        raise ValueError('Invalid input RA')
+
+    hours = float(parts[0])
+    minutes = math.copysign(float(parts[1]), hours)
+    seconds = math.copysign(float(parts[2]), hours)
+
+    return (hours + minutes / 60 + seconds / 3600) * math.pi / 12
+
+def parse_dec(dec_string):
+    """Converts a DD:MM:SS Dec string to radians"""
+    parts = dec_string.split(':')
+    if len(parts) != 3:
+        raise ValueError('Invalid input Dec')
+
+    degrees = float(parts[0])
+    minutes = math.copysign(float(parts[1]), degrees)
+    seconds = math.copysign(float(parts[2]), degrees)
+
+    return (degrees + minutes / 60 + seconds / 3600) * math.pi / 180
+
+def operate_cover(args):
+    """Opens or closes the mirror covers"""
+    command = args[0]
+
+    if command == 'open':
+        with Pyro4.Proxy(DAEMON_URI) as teld:
+            return teld.open_covers()
+    elif command == 'close':
+        with Pyro4.Proxy(DAEMON_URI) as teld:
+            return teld.close_covers()
+
+    print('Unknown cover command: ' + command)
+    return 1
+
+def park(args):
+    """Slews the telescope to a named park position"""
+    if len(args) == 0:
+        print('Please specify a park postion.')
+        print('Available positions are:')
+        for p in PARK_POSITIONS:
+            print('\t' + p)
+        return 1
+
+    if args[0] not in PARK_POSITIONS:
+        print('Unknown park position: ' + args[0])
+        print('Available positions are:')
+        for p in PARK_POSITIONS:
+            print('\t' + p)
+        return 1
+
+    alt_radians, az_radians = PARK_POSITIONS.get(args[0])
+    with Pyro4.Proxy(DAEMON_URI) as teld:
+        return teld.slew_altaz(alt_radians, az_radians)
+
+def slew(args):
+    """Slews the telescope to a specified RA,Dec position"""
+    if len(args) != 2:
+        print('Please specify RA and Dec coordinates.')
+        return 1
+
+    ra_radians = parse_ra(args[0])
+    dec_radians = parse_dec(args[1])
+    with Pyro4.Proxy(DAEMON_URI) as teld:
+        return teld.slew_radec(ra_radians, dec_radians)
+
+def track(args):
+    """Slews the telescope to a specified RA,Dec position and begins tracking"""
+    if len(args) != 2:
+        print('Please specify RA and Dec coordinates.')
+        return 1
+
+    ra_radians = parse_ra(args[0])
+    dec_radians = parse_dec(args[1])
+    with Pyro4.Proxy(DAEMON_URI) as teld:
+        return teld.track_radec(ra_radians, dec_radians)
+
+def offset(args):
+    """Offsets the telescope by a specified delta RA,Dec"""
+    if len(args) != 2:
+        print('Please specify RA and Dec offsets.')
+        return 1
+
+    offset_ra_radians = parse_ra(args[0])
+    offset_dec_radians = parse_dec(args[1])
+    with Pyro4.Proxy(DAEMON_URI) as teld:
+        return teld.offset_radec(offset_ra_radians, offset_dec_radians)
+
+def calibrate(args):
+    """Performs the home and limit calibrations"""
+    command = args[0]
+    if command == 'home':
+        with Pyro4.Proxy(DAEMON_URI) as teld:
+            return teld.find_homes()
+    elif command == 'limits':
+        with Pyro4.Proxy(DAEMON_URI) as teld:
+            return teld.find_limits()
+
+    print('Unknown calibration command: ' + command)
+    return 1
+
+def stop():
+    """Stops any active telescope movement"""
+    with Pyro4.Proxy(DAEMON_URI) as teld:
+        return teld.stop()
+
+def initialize():
+    """Enables the power and talon daemons"""
+    with Pyro4.Proxy(DAEMON_URI) as teld:
+        return teld.initialize()
+
+def shutdown():
+    """Disables the talon daemons and power"""
+    with Pyro4.Proxy(DAEMON_URI) as teld:
+        return teld.shutdown()
+
+def reboot():
+    """Reboots the talon daemons and power"""
+    shutdown()
+    time.sleep(5)
+    return initialize()
+
+def print_usage():
+    """Prints the utility help"""
+    print('Usage: {} command'.format(SCRIPT_NAME))
+    print()
+    print('    {} status'.format(SCRIPT_NAME))
+    print()
+    print('  Print a human-readable summary of the telescope status and exit')
+    print()
+
+    return 1
+
+if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        sys.exit(print_usage())
+    if sys.argv[1] == 'covers':
+        run_command(lambda: operate_cover(sys.argv[2:]))
+    if sys.argv[1] == 'park':
+        run_command(lambda: park(sys.argv[2:]))
+    if sys.argv[1] == 'slew':
+        run_command(lambda: slew(sys.argv[2:]))
+    if sys.argv[1] == 'track':
+        run_command(lambda: track(sys.argv[2:]))
+    if sys.argv[1] == 'offset':
+        run_command(lambda: offset(sys.argv[2:]))
+    if sys.argv[1] == 'cal':
+        run_command(lambda: calibrate(sys.argv[2:]))
+    if sys.argv[1] == 'stop':
+        run_command(stop)
+    if sys.argv[1] == 'init':
+        run_command(initialize)
+    if sys.argv[1] == 'kill':
+        run_command(shutdown)
+    if sys.argv[1] == 'reboot':
+        run_command(reboot)
+
+    # Command not found
+    sys.exit(print_usage())
