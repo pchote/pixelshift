@@ -15,6 +15,12 @@ typedef struct
 	double *data;
 	uint16_t width;
 	uint16_t height;
+
+	// Image region (ignoring overscan)
+	uint16_t image_x;
+	uint16_t image_y;
+	uint16_t image_width;
+	uint16_t image_height;
 } framedata;
 
 framedata *framedata_load(const char *filename);

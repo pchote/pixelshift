@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <fitsio2.h>
 #include <math.h>
 #include <inttypes.h>
@@ -47,6 +48,25 @@ framedata *framedata_load(const char *filename)
 	{
 		fprintf(stderr, "fits_read_pix failed with status %d for %s\n", status, filename);
 		goto error;
+	}
+
+	frame->image_x = 0;
+	frame->image_y = 0;
+	frame->image_width = frame->width;
+	frame->image_height = frame->height;
+
+	char region[FLEN_VALUE];
+	fits_read_key(input, TSTRING, "IMAG-RGN", region, NULL, &status);
+	if (!status)
+	{
+		uint16_t x1, x2, y1, y2;
+		if (sscanf(region, "[%hu:%hu,%hu:%hu]", &x1, &x2, &y1, &y2) == 4)
+		{
+			frame->image_x = x1 - 1;
+			frame->image_y = y1 - 1;
+			frame->image_width = x2 - x1;
+			frame->image_height = y2 - y1;
+		}
 	}
 
 	fits_close_file(input, &status);
@@ -100,10 +120,10 @@ int framedata_subtract_background(framedata *frame, uint16_t min_tile_size)
 {
 	// Extend tile width/height by a few px if necessary to
 	// reduce the margin of unused pixels on the right/top edge
-	uint16_t x_tile_count = frame->width / min_tile_size;
-	uint16_t y_tile_count = frame->height / min_tile_size;
-	uint16_t tile_width = frame->width / x_tile_count;
-	uint16_t tile_height = frame->height / y_tile_count;
+	uint16_t x_tile_count = frame->image_width / min_tile_size;
+	uint16_t y_tile_count = frame->image_height / min_tile_size;
+	uint16_t tile_width = frame->image_width / x_tile_count;
+	uint16_t tile_height = frame->image_height / y_tile_count;
 
 	// Extra margin accounts for the edge tiles that are extended to fill the remaining gap
 	double *tile_buf = calloc(tile_width * tile_height, sizeof(double));
@@ -122,8 +142,8 @@ int framedata_subtract_background(framedata *frame, uint16_t min_tile_size)
 	{
 		for (uint16_t tx = 0; tx < x_tile_count; tx++)
 		{
-			uint16_t x_start = tx * tile_width;
-			uint16_t y_start = ty * tile_height;
+			uint16_t x_start = tx * tile_width + frame->image_x;
+			uint16_t y_start = ty * tile_height + frame->image_y;
 
 			size_t i = 0;
 			for (uint16_t dy = 0; dy < tile_height; dy++)
@@ -154,14 +174,14 @@ int framedata_subtract_background(framedata *frame, uint16_t min_tile_size)
 			// Interpolate over all the pixels inside the image area inside this tile
 			for (uint16_t dy = 0; dy < tile_height; dy++)
 			{
-				int32_t y = ty * tile_height + tile_height / 2 + dy;
-				if (y < 0 || y >= frame->height)
+				int32_t y = ty * tile_height + tile_height / 2 + dy + frame->image_y;
+				if (y < frame->image_y || y >= frame->image_height + frame->image_y)
 					continue;
 
 				for (uint16_t dx = 0; dx < tile_width; dx++)
 				{
-					int32_t x = tx * tile_width + tile_width / 2 + dx;
-					if (x < 0 || x >= frame->width)
+					int32_t x = tx * tile_width + tile_width / 2 + dx + frame->image_x;
+					if (x < frame->image_x || x >= frame->image_width + frame->image_x)
 						continue;
 
 					double bg = (uint16_t)bicubic_interpolate(p, dx * 1.0 / tile_width, dy * 1.0 / tile_height);
@@ -169,6 +189,15 @@ int framedata_subtract_background(framedata *frame, uint16_t min_tile_size)
 				}
 			}
 		}
+	}
+
+	// Zero out any pixels outside the image region
+	if (frame->image_width != frame->width || frame->image_height != frame->height)
+	{
+		for (int32_t y = 0; y < frame->height; y++)
+			for (int32_t x = 0; x < frame->width; x++)
+				if (y < frame->image_y || y >= frame->image_y + frame->image_height || x < frame->image_x || x >= frame->image_x + frame->image_width)
+					frame->data[y * frame->width + x] = 0;
 	}
 
 	free(tile_buf);
