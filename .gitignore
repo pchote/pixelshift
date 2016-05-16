@@ -1,3 +1,4 @@
 *.o
 pixelshift
+backgroundsubtract
 .DS_Store

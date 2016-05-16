@@ -13,14 +13,22 @@ ifeq ($(shell uname),Darwin)
 	LFLAGS += -L/usr/local/lib
 endif
 
-SRC = pixelshift.c framedata.c fit.c
-OBJ = $(SRC:.c=.o)
+PS_SRC = pixelshift.c framedata.c fit.c
+PS_OBJ = $(PS_SRC:.c=.o)
 
-pixelshift: $(OBJ)
-	$(LINKER) -o $@ $(OBJ) $(LFLAGS)
+BS_SRC = backgroundsubtract.c framedata.c
+BS_OBJ = $(BS_SRC:.c=.o)
+
+all: pixelshift backgroundsubtract
+
+pixelshift: $(PS_OBJ)
+	$(LINKER) -o $@ $(PS_OBJ) $(LFLAGS)
+
+backgroundsubtract: $(BS_OBJ)
+	$(LINKER) -o $@ $(BS_OBJ) $(LFLAGS)
 
 clean:
-	-rm $(OBJ) pixelshift
+	-rm $(PS_OBJ) $(BS_OBJ) pixelshift backgroundsubtract
 
 .SUFFIXES: .c
 .c.o:

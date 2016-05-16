@@ -24,6 +24,7 @@ typedef struct
 } framedata;
 
 framedata *framedata_load(const char *filename);
+int framedata_save(framedata *fd, const char *path);
 void framedata_free(framedata *frame);
 int framedata_subtract_background(framedata *frame, uint16_t min_tile_size);
 

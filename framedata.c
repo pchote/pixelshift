@@ -78,6 +78,32 @@ error:
 	return NULL;
 }
 
+
+int framedata_save(framedata *fd, const char *path)
+{
+    fitsfile *out;
+    int status = 0;
+
+    // Prepending path with a '!' tells cfitsio to
+    // overwrite any existing file.
+    size_t filepath_len = strlen(path) + 2;
+    char *filepath = malloc(filepath_len*sizeof(char));
+    snprintf(filepath, filepath_len, "!%s", path);
+
+    fits_create_file(&out, filepath, &status);
+    free(filepath);
+
+    // Create the primary array image (16-bit short integer pixels
+    fits_create_img(out, DOUBLE_IMG, 2, (long []){fd->width, fd->height}, &status);
+
+    // Write the frame data to the image
+    if (fits_write_img(out, TDOUBLE, 1, fd->width*fd->height, fd->data, &status))
+	fprintf(stderr, "fits_write_img failed with status %d\n", status);
+
+    fits_close_file(out, &status);
+    return 0;
+}
+
 void framedata_free(framedata *frame)
 {
 	if (!frame)
